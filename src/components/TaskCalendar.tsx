@@ -279,6 +279,65 @@ export function TaskCalendar({ tasks }: TaskCalendarProps) {
     }
   }, [myEvents])
 
+  // Save positions on component unmount to ensure no data is lost
+  useEffect(() => {
+    return () => {
+      if (!myEvents.length || typeof window === 'undefined') return;
+      
+      try {
+        // Create a map of task IDs to their positions
+        const taskPositionMap: Record<string, { start: string, end: string }> = myEvents.reduce((acc, event) => {
+          acc[event.id] = {
+            start: event.start.toISOString(),
+            end: event.end.toISOString()
+          }
+          return acc
+        }, {} as Record<string, { start: string, end: string }>)
+        
+        // Save to localStorage before unmount
+        localStorage.setItem('calendar_task_positions', JSON.stringify(taskPositionMap))
+        localStorage.setItem('calendar_task_positions_timestamp', new Date().toISOString())
+        console.log('Saved calendar positions before unmount')
+      } catch (error) {
+        console.warn('Failed to save task positions on unmount:', error)
+      }
+    };
+  }, [myEvents]);
+
+  // Force database update when moving out of calendar tab
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden' && myEvents.length > 0) {
+        // Page is being hidden, save state to localStorage
+        try {
+          // Create a map of task IDs to their positions
+          const taskPositionMap: Record<string, { start: string, end: string }> = myEvents.reduce((acc, event) => {
+            acc[event.id] = {
+              start: event.start.toISOString(),
+              end: event.end.toISOString()
+            }
+            return acc
+          }, {} as Record<string, { start: string, end: string }>)
+          
+          // Save to localStorage
+          localStorage.setItem('calendar_task_positions', JSON.stringify(taskPositionMap))
+          localStorage.setItem('calendar_task_positions_timestamp', new Date().toISOString())
+        } catch (error) {
+          console.warn('Failed to save positions on visibility change:', error)
+        }
+      }
+    };
+    
+    // Listen for tab/window visibility changes
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [myEvents]);
+
   // Function to update task in the database
   const updateTaskInDatabase = useCallback(async (
     taskId: string, 
@@ -331,7 +390,7 @@ export function TaskCalendar({ tasks }: TaskCalendarProps) {
         allDay: droppedOnAllDaySlot
       }
 
-      // Update events in state
+      // Update events in state immediately
       setMyEvents(prev => {
         const filtered = prev.filter(ev => ev.id !== event.id)
         const updatedEvents = [...filtered, updatedEvent]
@@ -358,57 +417,51 @@ export function TaskCalendar({ tasks }: TaskCalendarProps) {
         return updatedEvents
       })
 
-      try {
-        // Update directly to the database
-        const response = await fetch(`/api/tasks/${event.id}`, {
-          method: 'PATCH',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            startDate: startDate.toISOString(),
-            dueDate: endDate.toISOString(),
-            isAllDay: droppedOnAllDaySlot,
-          }),
-        })
+      // Try updating the database with retries
+      let retries = 0;
+      const maxRetries = 3;
+      let success = false;
+      
+      while (retries < maxRetries && !success) {
+        try {
+          // Update database
+          const response = await fetch(`/api/tasks/${event.id}`, {
+            method: 'PATCH',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              startDate: startDate.toISOString(),
+              dueDate: endDate.toISOString(),
+              isAllDay: droppedOnAllDaySlot,
+            }),
+          })
 
-        if (!response.ok) {
-          const errorData = await response.json()
-          throw new Error(errorData.message || 'Failed to update task')
-        }
-
-        // Don't dispatch refresh event to prevent reverting changes
-        toast.success('Task updated successfully')
-      } catch (error) {
-        console.error('Error updating task:', error)
-        toast.error(error instanceof Error ? error.message : 'Failed to update task')
-        
-        // Revert if failed
-        setMyEvents(prev => {
-          const filtered = prev.filter(ev => ev.id !== event.id)
-          const updatedEvents = [...filtered, event]
-          
-          // Update localStorage with reverted state
-          if (typeof window !== 'undefined') {
-            try {
-              const taskPositionMap = updatedEvents.reduce((acc, ev) => {
-                acc[ev.id] = {
-                  start: ev.start.toISOString(),
-                  end: ev.end.toISOString()
-                }
-                return acc
-              }, {})
-              
-              localStorage.setItem('calendar_task_positions', JSON.stringify(taskPositionMap))
-              localStorage.setItem('calendar_task_positions_timestamp', new Date().toISOString())
-            } catch (err) {
-              console.warn('Failed to save task positions to localStorage:', err)
+          if (response.ok) {
+            success = true;
+            // Don't dispatch refresh event to prevent reverting changes
+            if (retries === 0) { // Only show toast on first successful attempt
+              toast.success('Task updated successfully')
             }
+          } else {
+            const errorData = await response.json()
+            throw new Error(errorData.message || 'Failed to update task')
           }
+        } catch (error) {
+          console.error(`Error updating task (attempt ${retries + 1}):`, error)
+          retries++;
           
-          return updatedEvents
-        })
+          if (retries >= maxRetries) {
+            toast.error('Failed to update task in database, but your changes are saved locally')
+          } else {
+            // Wait before retrying (exponential backoff)
+            await new Promise(resolve => setTimeout(resolve, 1000 * retries))
+          }
+        }
       }
+      
+      // Even if database update failed, we keep the UI updated and localStorage saved
+      // This ensures the user's changes persist locally
     },
     []
   )

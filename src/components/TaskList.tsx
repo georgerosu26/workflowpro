@@ -37,7 +37,36 @@ export function TaskList() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastCalendarUpdate, setLastCalendarUpdate] = useState<string | null>(null);
+  const [previousSessionId, setPreviousSessionId] = useState<string | null>(null);
 
+  // Track session changes
+  useEffect(() => {
+    if (previousSessionId !== sessionId) {
+      // When session changes, save current calendar state before fetching new tasks
+      if (activeTab === 'calendar' && tasks.length > 0 && typeof window !== 'undefined') {
+        try {
+          // Save current task positions to temporary storage keyed by session
+          const taskPositionMap = tasks.reduce((acc, task) => {
+            if (task.startDate && task.dueDate) {
+              acc[task.id] = {
+                start: task.startDate instanceof Date ? task.startDate.toISOString() : task.startDate,
+                end: task.dueDate instanceof Date ? task.dueDate.toISOString() : task.dueDate
+              };
+            }
+            return acc;
+          }, {} as Record<string, {start: string, end: string}>);
+          
+          localStorage.setItem('calendar_task_positions', JSON.stringify(taskPositionMap));
+          localStorage.setItem('calendar_task_positions_timestamp', new Date().toISOString());
+        } catch (err) {
+          console.warn('Error saving calendar positions during session change:', err);
+        }
+      }
+      setPreviousSessionId(sessionId);
+    }
+  }, [sessionId, activeTab, tasks, previousSessionId]);
+
+  // Modify fetchTasks to always check for saved positions in calendar tab
   const fetchTasks = useCallback(async () => {
     try {
       setLoading(true);
@@ -53,8 +82,7 @@ export function TaskList() {
       const data = await response.json();
       const newTasks = Array.isArray(data.tasks) ? data.tasks : [];
       
-      // If we're in the calendar tab, we want to preserve position data
-      // rather than overwriting with database values
+      // For calendar tab, always prioritize stored positions
       if (activeTab === 'calendar' && typeof window !== 'undefined') {
         try {
           const storedPositions = localStorage.getItem('calendar_task_positions');
@@ -75,14 +103,15 @@ export function TaskList() {
             
             setTasks(tasksWithPositions);
             setError(null);
-            return;
+            setLoading(false);
+            return; // Exit early
           }
         } catch (err) {
           console.warn('Error applying stored calendar positions:', err);
         }
       }
       
-      // If we're not in calendar tab or no stored positions exist
+      // If not in calendar tab or no stored positions
       setTasks(newTasks);
       setError(null);
     } catch (err) {
@@ -95,10 +124,10 @@ export function TaskList() {
     }
   }, [sessionId, activeTab]);
 
-  // Initial fetch - only when component mounts
+  // Only fetch tasks when sessionId changes or activeTab changes
   useEffect(() => {
     fetchTasks();
-  }, [fetchTasks]);
+  }, [fetchTasks, sessionId, activeTab]);
 
   // Handle task refresh events but filter out calendar updates
   useEffect(() => {

@@ -84,18 +84,37 @@ export async function POST(req: NextRequest) {
 
     await connectToDatabase()
 
-    const createdTasks = await Task.create(
-      tasks.map(task => ({
-        ...task,
-        userId: user.id
-      }))
-    )
+    // Validate tasks before creation
+    const tasksWithUser = tasks.map(task => ({
+      ...task,
+      userId: user.id,
+      id: task.id || crypto.randomUUID(),
+      status: task.status || 'todo'
+    }))
 
-    return NextResponse.json({ tasks: createdTasks })
+    console.log('Creating tasks:', JSON.stringify(tasksWithUser, null, 2))
+
+    try {
+      const createdTasks = await Task.create(tasksWithUser)
+      console.log('Successfully created tasks:', createdTasks.length)
+      return NextResponse.json({ tasks: createdTasks })
+    } catch (dbError) {
+      console.error('Database error creating tasks:', dbError)
+      return NextResponse.json(
+        { 
+          error: 'Failed to create tasks',
+          details: dbError instanceof Error ? dbError.message : 'Unknown database error'
+        },
+        { status: 400 }
+      )
+    }
   } catch (error) {
     console.error('Error in POST /api/tasks:', error)
     return NextResponse.json(
-      { error: 'Internal server error' },
+      { 
+        error: 'Internal server error',
+        details: error instanceof Error ? error.message : 'Unknown error'
+      },
       { status: 500 }
     )
   }

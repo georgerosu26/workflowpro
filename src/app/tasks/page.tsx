@@ -5,7 +5,7 @@ import { DragDropContext, Droppable, Draggable, DroppableProvided, DraggableProv
 import { toast } from 'sonner'
 import { useAuth, useSession } from '@clerk/nextjs'
 import { Suspense } from 'react'
-import TaskList from '@/components/TaskList'
+import { TaskList } from '@/components/TaskList'
 import { ChatSessions } from '@/components/ChatSessions'
 
 interface Task {
@@ -168,27 +168,32 @@ export default function TasksPage() {
   }
 
   return (
-    <div className="container mx-auto p-4">
-      <div className="flex gap-4">
-        {/* Main content */}
-        <div className="flex-1">
-          <h1 className="text-2xl font-bold mb-4">Tasks</h1>
+    <div className="container mx-auto p-4 h-screen flex flex-col">
+      <h1 className="text-2xl font-bold mb-4">Tasks</h1>
+      <div className="flex gap-4 flex-1 h-[calc(100vh-6rem)] overflow-hidden">
+        {/* Main content - takes 80% of the space */}
+        <div className="flex-[4] overflow-auto">
           <Suspense fallback={<div>Loading tasks...</div>}>
             <TaskList />
           </Suspense>
         </div>
         
-        {/* Chat sessions sidebar */}
-        <div className="w-80 border-l pl-4">
-          <ChatSessions 
-            onSessionSelect={(sessionId) => {
-              // Update URL with session filter
-              const url = new URL(window.location.href)
-              url.searchParams.set('session', sessionId)
-              window.history.pushState({}, '', url)
-              // The TaskList component will handle the filter via useSearchParams
-            }}
-          />
+        {/* Chat sessions sidebar - takes 20% of the space */}
+        <div className="flex-1 border-l pl-4 h-full flex flex-col min-w-[250px] max-w-[300px]">
+          <div className="sticky top-0 bg-white pb-2 z-10">
+            <h2 className="text-lg font-semibold mb-2">Chat History</h2>
+          </div>
+          <div className="flex-1 overflow-y-auto h-full">
+            <ChatSessions 
+              onSessionSelect={(sessionId: string | null) => {
+                if (sessionId) {
+                  const url = new URL(window.location.href)
+                  url.searchParams.set('session', sessionId)
+                  window.history.pushState({}, '', url)
+                }
+              }}
+            />
+          </div>
         </div>
       </div>
     </div>

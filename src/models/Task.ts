@@ -12,6 +12,7 @@ export interface TaskDocument extends Document {
   userId: string
   startDate: Date
   dueDate: Date
+  isAllDay: boolean
   createdAt: Date
   updatedAt: Date
 }
@@ -33,17 +34,16 @@ const TaskSchema = new mongoose.Schema({
   priority: {
     type: String,
     enum: ['low', 'medium', 'high'],
-    default: 'medium',
+    required: true,
   },
   category: {
     type: String,
     required: true,
-    default: 'general',
   },
   status: {
     type: String,
     enum: ['todo', 'in-progress', 'done'],
-    default: 'todo',
+    required: true,
   },
   sessionId: {
     type: String,
@@ -51,7 +51,6 @@ const TaskSchema = new mongoose.Schema({
   },
   aiResponseId: {
     type: String,
-    required: true,
   },
   userId: {
     type: String,
@@ -59,15 +58,13 @@ const TaskSchema = new mongoose.Schema({
   },
   startDate: {
     type: Date,
-    default: Date.now,
   },
   dueDate: {
     type: Date,
-    default: () => {
-      const date = new Date()
-      date.setDate(date.getDate() + 7) // Default due date is 7 days from creation
-      return date
-    },
+  },
+  isAllDay: {
+    type: Boolean,
+    default: true,
   },
   createdAt: {
     type: Date,

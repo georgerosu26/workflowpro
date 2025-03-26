@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useEffect, useState, useCallback } from 'react';
+import { useSearchParams, useRouter } from 'next/navigation';
 import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd';
 import type { DropResult } from '@hello-pangea/dnd';
 import { Badge } from '@/components/ui/badge';
@@ -7,6 +7,9 @@ import { Card } from '@/components/ui/card';
 import { toast } from 'sonner';
 import { TaskCalendar } from './TaskCalendar';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { AIAssistantTab } from './AIAssistantTab';
+import { useParams } from 'next/navigation';
+import { KanbanBoard } from './KanbanBoard';
 
 interface Task {
   id: string;
@@ -16,52 +19,99 @@ interface Task {
   category: string;
   status: 'todo' | 'in-progress' | 'done';
   sessionId: string;
+  aiResponseId: string;
+  userId: string;
   startDate?: Date;
   dueDate?: Date;
+  createdAt: Date;
+  updatedAt: Date;
 }
 
-export default function TaskList() {
+export function TaskList() {
   const searchParams = useSearchParams();
+  const router = useRouter();
   const sessionId = searchParams.get('session');
+  const activeTab = searchParams.get('tab') || 'kanban';
   
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [view, setView] = useState<'board' | 'calendar'>('board');
+  const [lastCalendarUpdate, setLastCalendarUpdate] = useState<string | null>(null);
 
-  useEffect(() => {
-    const fetchTasks = async () => {
-      try {
-        setLoading(true);
-        const url = new URL('/api/tasks', window.location.origin);
-        if (sessionId) {
-          url.searchParams.set('sessionId', sessionId);
-        }
-        
-        const response = await fetch(url);
-        if (!response.ok) {
-          throw new Error('Failed to fetch tasks');
-        }
-        
-        const data = await response.json();
-        console.log('Fetched tasks:', data.tasks);
-        setTasks(data.tasks || []);
-      } catch (err) {
-        console.error('Error fetching tasks:', err);
-        setError(err instanceof Error ? err.message : 'Failed to load tasks');
-        toast.error('Failed to load tasks');
-      } finally {
-        setLoading(false);
+  const fetchTasks = useCallback(async () => {
+    try {
+      setLoading(true);
+      const url = sessionId 
+        ? `/api/tasks?sessionId=${sessionId}`
+        : '/api/tasks';
+      
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error('Failed to fetch tasks');
       }
-    };
-
-    fetchTasks();
+      
+      const data = await response.json();
+      // The API returns { tasks: Task[] }, so we need to access data.tasks
+      setTasks(Array.isArray(data.tasks) ? data.tasks : []);
+      setError(null);
+    } catch (err) {
+      console.error('Error fetching tasks:', err);
+      setError(err instanceof Error ? err.message : 'Failed to fetch tasks');
+      // Initialize with empty array on error
+      setTasks([]);
+    } finally {
+      setLoading(false);
+    }
   }, [sessionId]);
 
+  // Initial fetch - only when component mounts
+  useEffect(() => {
+    fetchTasks();
+  }, [fetchTasks]);
+
+  // Handle task refresh events but filter out calendar updates
+  useEffect(() => {
+    const handleRefresh = (event: CustomEvent) => {
+      // Skip calendar updates
+      if (event.detail?.action === 'update' && activeTab === 'calendar') {
+        return;
+      }
+      
+      console.log('Refreshing tasks...')
+      fetchTasks()
+    }
+
+    window.addEventListener('refreshTasks', handleRefresh as EventListener)
+    return () => {
+      window.removeEventListener('refreshTasks', handleRefresh as EventListener)
+    }
+  }, [fetchTasks, activeTab])
+
+  // Sync task list when changing tabs but preserve calendar changes
+  const handleTabChange = (value: string) => {
+    const params = new URLSearchParams(searchParams.toString());
+    params.set('tab', value);
+    
+    // Only refresh tasks if we're not coming from calendar
+    if (activeTab === 'calendar' && value !== 'calendar') {
+      // Save state that we just left calendar tab
+      setLastCalendarUpdate(new Date().toISOString());
+    } else if (value === 'calendar' && lastCalendarUpdate !== null) {
+      // Don't reload tasks when returning to calendar to preserve event positions
+      // We already have the calendar state in memory
+    } else {
+      // Otherwise refresh tasks
+      fetchTasks();
+    }
+    
+    router.push(`?${params.toString()}`);
+  };
+
+  // Ensure tasks is always an array before filtering
   const columns = {
-    'todo': tasks.filter(task => task.status === 'todo'),
-    'in-progress': tasks.filter(task => task.status === 'in-progress'),
-    'done': tasks.filter(task => task.status === 'done')
+    'todo': Array.isArray(tasks) ? tasks.filter(task => task.status === 'todo') : [],
+    'in-progress': Array.isArray(tasks) ? tasks.filter(task => task.status === 'in-progress') : [],
+    'done': Array.isArray(tasks) ? tasks.filter(task => task.status === 'done') : [],
   };
 
   const onDragEnd = async (result: DropResult) => {
@@ -76,24 +126,14 @@ export default function TaskList() {
       return;
     }
 
-    const task = tasks.find(t => t.id === draggableId);
-    if (!task) return;
-
-    const newStatus = destination.droppableId as Task['status'];
-    
     try {
-      // Optimistically update the UI
-      setTasks(tasks.map(t => 
-        t.id === task.id ? { ...t, status: newStatus } : t
-      ));
-
-      const response = await fetch(`/api/tasks/${task.id}`, {
+      const response = await fetch(`/api/tasks/${draggableId}`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          status: newStatus,
+          status: destination.droppableId,
         }),
       });
 
@@ -101,14 +141,19 @@ export default function TaskList() {
         throw new Error('Failed to update task');
       }
 
-      toast.success('Task status updated');
-    } catch (err) {
-      console.error('Error updating task:', err);
-      // Revert the drag if the update failed
-      setTasks(prev => prev.map(t => 
-        t.id === task.id ? { ...t, status: source.droppableId as Task['status'] } : t
-      ));
-      toast.error('Failed to update task status');
+      // Optimistically update the UI
+      const updatedTasks = tasks.map(task =>
+        task.id === draggableId
+          ? { ...task, status: destination.droppableId as Task['status'] }
+          : task
+      );
+      setTasks(updatedTasks);
+      toast.success('Task updated successfully');
+    } catch (error) {
+      console.error('Error updating task:', error);
+      toast.error('Failed to update task');
+      // Revert the changes by re-fetching tasks
+      fetchTasks();
     }
   };
 
@@ -135,81 +180,31 @@ export default function TaskList() {
     );
   }
 
-  if (tasks.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center h-64 text-gray-500">
-        <p className="mb-2">
-          {sessionId 
-            ? "No tasks found for this chat session" 
-            : "No tasks found. Start a chat to create some tasks!"}
-        </p>
-      </div>
-    );
-  }
-
   return (
-    <div className="space-y-6">
-      <Tabs defaultValue="board" className="w-full">
-        <TabsList className="mb-4">
-          <TabsTrigger value="board">Kanban Board</TabsTrigger>
-          <TabsTrigger value="calendar">Calendar</TabsTrigger>
-        </TabsList>
+    <Tabs 
+      value={activeTab} 
+      onValueChange={handleTabChange} 
+      className="h-full flex flex-col"
+    >
+      <TabsList className="grid w-full grid-cols-3 mb-2">
+        <TabsTrigger value="kanban">Kanban Board</TabsTrigger>
+        <TabsTrigger value="calendar">Calendar</TabsTrigger>
+        <TabsTrigger value="ai-assistant">AI Assistant</TabsTrigger>
+      </TabsList>
 
-        <TabsContent value="board">
-          <DragDropContext onDragEnd={onDragEnd}>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              {Object.entries(columns).map(([columnId, columnTasks]) => (
-                <div key={columnId} className="bg-gray-50 p-4 rounded-lg">
-                  <h2 className="text-lg font-semibold mb-4 capitalize flex items-center justify-between">
-                    <span>{columnId.replace('-', ' ')}</span>
-                    <Badge variant="secondary">{columnTasks.length}</Badge>
-                  </h2>
-                  <Droppable droppableId={columnId}>
-                    {(provided) => (
-                      <div
-                        ref={provided.innerRef}
-                        {...provided.droppableProps}
-                        className="min-h-[200px] space-y-3"
-                      >
-                        {columnTasks.map((task, index) => (
-                          <Draggable key={task.id} draggableId={task.id} index={index}>
-                            {(provided) => (
-                              <Card
-                                ref={provided.innerRef}
-                                {...provided.draggableProps}
-                                {...provided.dragHandleProps}
-                                className="p-4 bg-white shadow-sm hover:shadow-md transition-shadow cursor-move"
-                              >
-                                <h3 className="font-semibold mb-2">{task.title}</h3>
-                                <p className="text-gray-600 mb-3 text-sm">{task.description}</p>
-                                <div className="flex items-center justify-between text-sm">
-                                  <Badge variant={
-                                    task.priority === 'high' ? 'destructive' :
-                                    task.priority === 'medium' ? 'secondary' :
-                                    'outline'
-                                  }>
-                                    {task.priority}
-                                  </Badge>
-                                  <Badge variant="outline">{task.category}</Badge>
-                                </div>
-                              </Card>
-                            )}
-                          </Draggable>
-                        ))}
-                        {provided.placeholder}
-                      </div>
-                    )}
-                  </Droppable>
-                </div>
-              ))}
-            </div>
-          </DragDropContext>
+      <div className="flex-1 overflow-hidden">
+        <TabsContent value="kanban" className="h-full m-0">
+          <KanbanBoard tasks={tasks} onUpdate={fetchTasks} />
         </TabsContent>
 
-        <TabsContent value="calendar">
+        <TabsContent value="calendar" className="h-full m-0 overflow-hidden">
           <TaskCalendar tasks={tasks} />
         </TabsContent>
-      </Tabs>
-    </div>
+
+        <TabsContent value="ai-assistant" className="h-full m-0 overflow-auto">
+          <AIAssistantTab />
+        </TabsContent>
+      </div>
+    </Tabs>
   );
-} 
+}

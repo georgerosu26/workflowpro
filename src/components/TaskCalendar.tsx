@@ -14,7 +14,7 @@ interface Task {
   priority: 'low' | 'medium' | 'high'
   category: string
   status: 'todo' | 'in-progress' | 'done'
-  sessionId: string
+  sessionId?: string
   dueDate?: Date | string
   startDate?: Date | string
   updatedAt?: Date | string 

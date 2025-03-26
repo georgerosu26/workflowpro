@@ -160,33 +160,23 @@ export function TaskCalendar({ tasks }: TaskCalendarProps) {
   useEffect(() => {
     if (!tasks?.length) return
 
-    // Try to load cached events from sessionStorage
+    // Try to load cached events from localStorage
     if (typeof window !== 'undefined') {
       try {
-        const storedEvents = sessionStorage.getItem('calendar_events')
-        const timestamp = sessionStorage.getItem('calendar_events_timestamp')
+        const storedTaskPositions = localStorage.getItem('calendar_task_positions')
+        const timestamp = localStorage.getItem('calendar_task_positions_timestamp')
         
-        if (storedEvents && timestamp) {
-          const eventData = JSON.parse(storedEvents)
+        if (storedTaskPositions && timestamp) {
+          const taskPositionMap = JSON.parse(storedTaskPositions)
           const lastUpdate = new Date(timestamp)
-          const fiveMinutesAgo = new Date()
-          fiveMinutesAgo.setMinutes(fiveMinutesAgo.getMinutes() - 5)
+          const oneDayAgo = new Date()
+          oneDayAgo.setDate(oneDayAgo.getDate() - 1)
           
-          // Only use stored events if they're recent (less than 5 minutes old)
-          if (lastUpdate > fiveMinutesAgo && eventData.length > 0) {
-            // Use stored positions but update with latest task data
-            // Create a map of task IDs to their stored positions
-            const eventPositions = eventData.reduce((acc: Record<string, {start: string, end: string}>, ev: any) => {
-              acc[ev.id] = { 
-                start: ev.start, 
-                end: ev.end 
-              }
-              return acc
-            }, {})
-            
+          // Use stored positions if they're less than a day old
+          if (lastUpdate > oneDayAgo) {
             // Apply stored positions to current tasks
             const newEvents = tasks.map(task => {
-              const storedPosition = eventPositions[task.id]
+              const storedPosition = taskPositionMap[task.id]
               
               // Use stored position if available, otherwise use task data
               let start, end
@@ -228,7 +218,7 @@ export function TaskCalendar({ tasks }: TaskCalendarProps) {
           }
         }
       } catch (error) {
-        console.warn('Failed to load events from sessionStorage:', error)
+        console.warn('Failed to load events from localStorage:', error)
       }
     }
     
@@ -266,6 +256,28 @@ export function TaskCalendar({ tasks }: TaskCalendarProps) {
     
     setMyEvents(newEvents)
   }, [tasks])
+
+  // Save event positions to localStorage whenever myEvents changes
+  useEffect(() => {
+    if (!myEvents.length || typeof window === 'undefined') return
+    
+    try {
+      // Create a map of task IDs to their positions
+      const taskPositionMap: Record<string, { start: string, end: string }> = myEvents.reduce((acc, event) => {
+        acc[event.id] = {
+          start: event.start.toISOString(),
+          end: event.end.toISOString()
+        }
+        return acc
+      }, {} as Record<string, { start: string, end: string }>)
+      
+      // Save to localStorage
+      localStorage.setItem('calendar_task_positions', JSON.stringify(taskPositionMap))
+      localStorage.setItem('calendar_task_positions_timestamp', new Date().toISOString())
+    } catch (error) {
+      console.warn('Failed to save task positions to localStorage:', error)
+    }
+  }, [myEvents])
 
   // Function to update task in the database
   const updateTaskInDatabase = useCallback(async (
@@ -324,13 +336,22 @@ export function TaskCalendar({ tasks }: TaskCalendarProps) {
         const filtered = prev.filter(ev => ev.id !== event.id)
         const updatedEvents = [...filtered, updatedEvent]
         
-        // Store updated events in sessionStorage to persist between navigation
+        // Store task positions in localStorage (session independent)
         if (typeof window !== 'undefined') {
           try {
-            sessionStorage.setItem('calendar_events', JSON.stringify(updatedEvents))
-            sessionStorage.setItem('calendar_events_timestamp', new Date().toISOString())
+            // Create a map of task IDs to their positions
+            const taskPositionMap: Record<string, { start: string, end: string }> = updatedEvents.reduce((acc, ev) => {
+              acc[ev.id] = {
+                start: ev.start.toISOString(),
+                end: ev.end.toISOString()
+              }
+              return acc
+            }, {} as Record<string, { start: string, end: string }>)
+            
+            localStorage.setItem('calendar_task_positions', JSON.stringify(taskPositionMap))
+            localStorage.setItem('calendar_task_positions_timestamp', new Date().toISOString())
           } catch (err) {
-            console.warn('Failed to save events to sessionStorage:', err)
+            console.warn('Failed to save task positions to localStorage:', err)
           }
         }
         
@@ -338,7 +359,7 @@ export function TaskCalendar({ tasks }: TaskCalendarProps) {
       })
 
       try {
-        // Update directly to the database without using updateTaskInDatabase
+        // Update directly to the database
         const response = await fetch(`/api/tasks/${event.id}`, {
           method: 'PATCH',
           headers: {
@@ -367,12 +388,21 @@ export function TaskCalendar({ tasks }: TaskCalendarProps) {
           const filtered = prev.filter(ev => ev.id !== event.id)
           const updatedEvents = [...filtered, event]
           
-          // Update sessionStorage with reverted state
+          // Update localStorage with reverted state
           if (typeof window !== 'undefined') {
             try {
-              sessionStorage.setItem('calendar_events', JSON.stringify(updatedEvents))
+              const taskPositionMap = updatedEvents.reduce((acc, ev) => {
+                acc[ev.id] = {
+                  start: ev.start.toISOString(),
+                  end: ev.end.toISOString()
+                }
+                return acc
+              }, {})
+              
+              localStorage.setItem('calendar_task_positions', JSON.stringify(taskPositionMap))
+              localStorage.setItem('calendar_task_positions_timestamp', new Date().toISOString())
             } catch (err) {
-              console.warn('Failed to save events to sessionStorage:', err)
+              console.warn('Failed to save task positions to localStorage:', err)
             }
           }
           
@@ -401,13 +431,21 @@ export function TaskCalendar({ tasks }: TaskCalendarProps) {
         const filtered = prev.filter(ev => ev.id !== event.id)
         const updatedEvents = [...filtered, updatedEvent]
         
-        // Store updated events in sessionStorage to persist between navigation
+        // Store updated events in localStorage to persist between sessions
         if (typeof window !== 'undefined') {
           try {
-            sessionStorage.setItem('calendar_events', JSON.stringify(updatedEvents))
-            sessionStorage.setItem('calendar_events_timestamp', new Date().toISOString())
+            const taskPositionMap: Record<string, { start: string, end: string }> = updatedEvents.reduce((acc, ev) => {
+              acc[ev.id] = {
+                start: ev.start.toISOString(),
+                end: ev.end.toISOString()
+              }
+              return acc
+            }, {} as Record<string, { start: string, end: string }>)
+            
+            localStorage.setItem('calendar_task_positions', JSON.stringify(taskPositionMap))
+            localStorage.setItem('calendar_task_positions_timestamp', new Date().toISOString())
           } catch (err) {
-            console.warn('Failed to save events to sessionStorage:', err)
+            console.warn('Failed to save task positions to localStorage:', err)
           }
         }
         
@@ -415,7 +453,7 @@ export function TaskCalendar({ tasks }: TaskCalendarProps) {
       })
 
       try {
-        // Update directly to the database without using updateTaskInDatabase
+        // Update directly to the database
         const response = await fetch(`/api/tasks/${event.id}`, {
           method: 'PATCH',
           headers: {
@@ -444,12 +482,21 @@ export function TaskCalendar({ tasks }: TaskCalendarProps) {
           const filtered = prev.filter(ev => ev.id !== event.id)
           const updatedEvents = [...filtered, event]
           
-          // Update sessionStorage with reverted state
+          // Update localStorage with reverted state
           if (typeof window !== 'undefined') {
             try {
-              sessionStorage.setItem('calendar_events', JSON.stringify(updatedEvents))
+              const taskPositionMap: Record<string, { start: string, end: string }> = updatedEvents.reduce((acc, ev) => {
+                acc[ev.id] = {
+                  start: ev.start.toISOString(),
+                  end: ev.end.toISOString()
+                }
+                return acc
+              }, {} as Record<string, { start: string, end: string }>)
+              
+              localStorage.setItem('calendar_task_positions', JSON.stringify(taskPositionMap))
+              localStorage.setItem('calendar_task_positions_timestamp', new Date().toISOString())
             } catch (err) {
-              console.warn('Failed to save events to sessionStorage:', err)
+              console.warn('Failed to save task positions to localStorage:', err)
             }
           }
           

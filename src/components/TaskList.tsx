@@ -51,8 +51,39 @@ export function TaskList() {
       }
       
       const data = await response.json();
-      // The API returns { tasks: Task[] }, so we need to access data.tasks
-      setTasks(Array.isArray(data.tasks) ? data.tasks : []);
+      const newTasks = Array.isArray(data.tasks) ? data.tasks : [];
+      
+      // If we're in the calendar tab, we want to preserve position data
+      // rather than overwriting with database values
+      if (activeTab === 'calendar' && typeof window !== 'undefined') {
+        try {
+          const storedPositions = localStorage.getItem('calendar_task_positions');
+          if (storedPositions) {
+            const positions = JSON.parse(storedPositions) as Record<string, {start: string, end: string}>;
+            
+            // Apply stored positions to fetched tasks
+            const tasksWithPositions = newTasks.map((task: Task) => {
+              if (positions[task.id]) {
+                return {
+                  ...task,
+                  startDate: positions[task.id].start,
+                  dueDate: positions[task.id].end
+                };
+              }
+              return task;
+            });
+            
+            setTasks(tasksWithPositions);
+            setError(null);
+            return;
+          }
+        } catch (err) {
+          console.warn('Error applying stored calendar positions:', err);
+        }
+      }
+      
+      // If we're not in calendar tab or no stored positions exist
+      setTasks(newTasks);
       setError(null);
     } catch (err) {
       console.error('Error fetching tasks:', err);
@@ -62,7 +93,7 @@ export function TaskList() {
     } finally {
       setLoading(false);
     }
-  }, [sessionId]);
+  }, [sessionId, activeTab]);
 
   // Initial fetch - only when component mounts
   useEffect(() => {

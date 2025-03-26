@@ -38,6 +38,11 @@ interface TaskCalendarProps {
 // This will persist even when components unmount/remount, as long as the page isn't refreshed
 let globalTaskPositions: Record<string, { start: string, end: string }> = {};
 
+// Make positions available to other components via window global
+if (typeof window !== 'undefined') {
+  window.__taskCalendarPositions = globalTaskPositions;
+}
+
 const locales = {
   'en-US': enUS,
 }
@@ -416,6 +421,11 @@ export function TaskCalendar({ tasks }: TaskCalendarProps) {
     
     // Also update global variable
     Object.assign(globalTaskPositions, newPositions);
+    
+    // Update window global for other components
+    if (typeof window !== 'undefined') {
+      window.__taskCalendarPositions = globalTaskPositions;
+    }
     
     // Also update localStorage as backup
     try {

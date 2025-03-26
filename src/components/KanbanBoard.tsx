@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react'
 import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -27,18 +28,46 @@ declare global {
 }
 
 export function KanbanBoard({ tasks, onUpdate }: KanbanBoardProps) {
+  // Local state to track tasks - this prevents the task from "jumping back"
+  const [localTasks, setLocalTasks] = useState<Task[]>(tasks)
+  
+  // Update local tasks when props change, but only if not in the middle of a drag operation
+  const [isDragging, setIsDragging] = useState(false)
+  
+  useEffect(() => {
+    if (!isDragging) {
+      setLocalTasks(tasks)
+    }
+  }, [tasks, isDragging])
+  
+  // Use local tasks for columns instead of props
   const columns = {
-    todo: tasks.filter(task => task.status === 'todo'),
-    'in-progress': tasks.filter(task => task.status === 'in-progress'),
-    done: tasks.filter(task => task.status === 'done'),
+    todo: localTasks.filter(task => task.status === 'todo'),
+    'in-progress': localTasks.filter(task => task.status === 'in-progress'),
+    done: localTasks.filter(task => task.status === 'done'),
+  }
+
+  const onDragStart = () => {
+    setIsDragging(true)
   }
 
   const onDragEnd = (result: DropResult) => {
+    setIsDragging(false)
+    
     if (!result.destination) return
 
     const { source, destination, draggableId } = result
 
     if (source.droppableId !== destination.droppableId) {
+      // Optimistically update the UI first
+      setLocalTasks(prevTasks => 
+        prevTasks.map(task => 
+          task.id === draggableId
+            ? { ...task, status: destination.droppableId as 'todo' | 'in-progress' | 'done' }
+            : task
+        )
+      )
+
       // Prepare update data - always include status change
       const updateData: any = { 
         status: destination.droppableId,
@@ -92,19 +121,26 @@ export function KanbanBoard({ tasks, onUpdate }: KanbanBoardProps) {
       })
         .then(response => {
           if (!response.ok) throw new Error('Failed to update task')
-          onUpdate()
+          // Instead of immediately running onUpdate (which causes a flash),
+          // wait a moment to let the optimistic update settle
+          setTimeout(() => {
+            onUpdate()
+          }, 300)
           toast.success('Task moved to ' + destination.droppableId.replace('-', ' '))
         })
         .catch(error => {
           console.error('Error updating task:', error)
           toast.error('Failed to update task')
+          
+          // If there's an error, revert the optimistic update
+          setLocalTasks(tasks)
         })
     }
   }
 
   return (
     <div className="h-full overflow-x-auto">
-      <DragDropContext onDragEnd={onDragEnd}>
+      <DragDropContext onDragStart={onDragStart} onDragEnd={onDragEnd}>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-4 min-w-[768px]">
           {Object.entries(columns).map(([columnId, columnTasks]) => (
             <div key={columnId} className="bg-gray-50 p-4 rounded-lg">

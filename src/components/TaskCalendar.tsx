@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect } from 'react'
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react'
 import { Calendar, dateFnsLocalizer, View } from 'react-big-calendar'
 import withDragAndDrop from 'react-big-calendar/lib/addons/dragAndDrop'
 import { format, parse, startOfWeek, getDay, addHours, startOfDay, endOfDay } from 'date-fns'
@@ -34,6 +34,10 @@ interface TaskCalendarProps {
   tasks: Task[]
 }
 
+// Create a dedicated module-level variable to store positions across renders
+// This will persist even when components unmount/remount, as long as the page isn't refreshed
+let globalTaskPositions: Record<string, { start: string, end: string }> = {};
+
 const locales = {
   'en-US': enUS,
 }
@@ -58,6 +62,12 @@ export function TaskCalendar({ tasks }: TaskCalendarProps) {
   const [view, setView] = useState<View>(initialView)
   const [date, setDate] = useState(new Date())
   const [myEvents, setMyEvents] = useState<CalendarEvent[]>([])
+
+  // Add a state to track whether positions have been modified
+  const [positionsChanged, setPositionsChanged] = useState(false);
+
+  // Create a ref to hold the latest task positions for unmount handling
+  const taskPositionsRef = useRef<Record<string, { start: string, end: string }>>({});
 
   // Function to load preferences from storage and URL
   const loadPreferences = useCallback(() => {
@@ -156,49 +166,174 @@ export function TaskCalendar({ tasks }: TaskCalendarProps) {
     }
   }, [updateURL])
 
+  // Synchronize database aggressively when component unmounts or tab changes
+  useEffect(() => {
+    // Function to synchronize all task positions to the database
+    const syncPositionsToDatabase = async () => {
+      if (!positionsChanged || !myEvents.length) return;
+      
+      // Create a batch of promises for all database updates
+      const updatePromises = myEvents.map(event => {
+        return fetch(`/api/tasks/${event.id}`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            startDate: event.start.toISOString(),
+            dueDate: event.end.toISOString(),
+            isAllDay: event.allDay || false,
+          }),
+        }).then(response => {
+          if (!response.ok) {
+            throw new Error(`Failed to update task ${event.id}`);
+          }
+          return event.id;
+        }).catch(error => {
+          console.error(`Error updating task ${event.id}:`, error);
+          return null;
+        });
+      });
+
+      // Execute all updates in parallel
+      try {
+        const results = await Promise.allSettled(updatePromises);
+        const successCount = results.filter(r => r.status === 'fulfilled' && r.value).length;
+        console.log(`Synced ${successCount}/${myEvents.length} task positions to database`);
+        setPositionsChanged(false);
+      } catch (error) {
+        console.error('Error syncing positions to database:', error);
+      }
+    };
+
+    // Add event listener for before page unload
+    const handleBeforeUnload = () => {
+      // Store positions in the global object for persistence
+      myEvents.forEach(event => {
+        globalTaskPositions[event.id] = {
+          start: event.start.toISOString(),
+          end: event.end.toISOString()
+        };
+      });
+      
+      // Update taskPositionsRef for unmount handler
+      taskPositionsRef.current = { ...globalTaskPositions };
+      
+      // We can't await in beforeunload, so we use sync localStorage as fallback
+      try {
+        localStorage.setItem('calendar_task_positions', JSON.stringify(globalTaskPositions));
+        localStorage.setItem('calendar_task_positions_timestamp', new Date().toISOString());
+      } catch (err) {
+        console.warn('Error saving positions before unload:', err);
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
+    // Set up cleanup function for component unmount
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      
+      // Use the ref to get latest positions (closures would use stale values)
+      syncPositionsToDatabase();
+      
+      // Update global storage as backup
+      Object.assign(globalTaskPositions, taskPositionsRef.current);
+    };
+  }, [myEvents, positionsChanged]);
+
   // Initialize events from tasks
   useEffect(() => {
     if (!tasks?.length) return
 
-    // Try to load cached events from localStorage
+    // First check our global positions object (in-memory state)
+    if (Object.keys(globalTaskPositions).length > 0) {
+      console.log('Using global task positions from memory');
+      
+      // Apply stored positions to current tasks
+      const newEvents = tasks.map(task => {
+        const storedPosition = globalTaskPositions[task.id];
+        
+        // Use stored position if available, otherwise use task data
+        let start, end;
+        if (storedPosition) {
+          start = new Date(storedPosition.start);
+          end = new Date(storedPosition.end);
+        } else {
+          start = task.startDate ? new Date(task.startDate) : startOfDay(new Date());
+          end = task.dueDate ? new Date(task.dueDate) : addHours(start, 1);
+        }
+        
+        // Ensure valid dates
+        if (isNaN(start.getTime())) {
+          start = startOfDay(new Date());
+        }
+        if (isNaN(end.getTime())) {
+          end = addHours(start, 1);
+        }
+        
+        // Ensure end is after start
+        if (end <= start) {
+          end = addHours(start, 1);
+        }
+        
+        return {
+          id: task.id,
+          title: task.title,
+          start,
+          end,
+          allDay: false,
+          priority: task.priority,
+        };
+      });
+      
+      // Sort events
+      newEvents.sort((a, b) => a.start.getTime() - b.start.getTime());
+      setMyEvents(newEvents);
+      return; // Early return if we used in-memory positions
+    }
+
+    // Then try localStorage as fallback
     if (typeof window !== 'undefined') {
       try {
-        const storedTaskPositions = localStorage.getItem('calendar_task_positions')
-        const timestamp = localStorage.getItem('calendar_task_positions_timestamp')
+        const storedTaskPositions = localStorage.getItem('calendar_task_positions');
+        const timestamp = localStorage.getItem('calendar_task_positions_timestamp');
         
         if (storedTaskPositions && timestamp) {
-          const taskPositionMap = JSON.parse(storedTaskPositions)
-          const lastUpdate = new Date(timestamp)
-          const oneDayAgo = new Date()
-          oneDayAgo.setDate(oneDayAgo.getDate() - 1)
+          const taskPositionMap = JSON.parse(storedTaskPositions);
+          const lastUpdate = new Date(timestamp);
+          const oneDayAgo = new Date();
+          oneDayAgo.setDate(oneDayAgo.getDate() - 1);
           
           // Use stored positions if they're less than a day old
           if (lastUpdate > oneDayAgo) {
-            // Apply stored positions to current tasks
+            console.log('Using task positions from localStorage');
+            // Load into global state for future use
+            globalTaskPositions = { ...taskPositionMap };
+            
+            // Apply stored positions to current tasks (same code as above)
             const newEvents = tasks.map(task => {
-              const storedPosition = taskPositionMap[task.id]
+              const storedPosition = taskPositionMap[task.id];
               
               // Use stored position if available, otherwise use task data
-              let start, end
+              let start, end;
               if (storedPosition) {
-                start = new Date(storedPosition.start)
-                end = new Date(storedPosition.end)
+                start = new Date(storedPosition.start);
+                end = new Date(storedPosition.end);
               } else {
-                start = task.startDate ? new Date(task.startDate) : startOfDay(new Date())
-                end = task.dueDate ? new Date(task.dueDate) : addHours(start, 1)
+                start = task.startDate ? new Date(task.startDate) : startOfDay(new Date());
+                end = task.dueDate ? new Date(task.dueDate) : addHours(start, 1);
               }
               
               // Ensure valid dates
               if (isNaN(start.getTime())) {
-                start = startOfDay(new Date())
+                start = startOfDay(new Date());
               }
               if (isNaN(end.getTime())) {
-                end = addHours(start, 1)
+                end = addHours(start, 1);
               }
-              
-              // Ensure end is after start
               if (end <= start) {
-                end = addHours(start, 1)
+                end = addHours(start, 1);
               }
               
               return {
@@ -208,37 +343,36 @@ export function TaskCalendar({ tasks }: TaskCalendarProps) {
                 end,
                 allDay: false,
                 priority: task.priority,
-              }
-            })
+              };
+            });
             
             // Sort events
-            newEvents.sort((a, b) => a.start.getTime() - b.start.getTime())
-            setMyEvents(newEvents)
-            return // Early return if we used stored positions
+            newEvents.sort((a, b) => a.start.getTime() - b.start.getTime());
+            setMyEvents(newEvents);
+            return; // Early return if we used stored positions
           }
         }
       } catch (error) {
-        console.warn('Failed to load events from localStorage:', error)
+        console.warn('Failed to load events from localStorage:', error);
       }
     }
     
-    // If no stored events or they weren't usable, create new events from tasks
+    // If no stored events, use task data from props
+    console.log('Using task positions from database');
     const newEvents = tasks.map(task => {
-      let start = task.startDate ? new Date(task.startDate) : startOfDay(new Date())
-      let end = task.dueDate ? new Date(task.dueDate) : addHours(start, 1)
+      let start = task.startDate ? new Date(task.startDate) : startOfDay(new Date());
+      let end = task.dueDate ? new Date(task.dueDate) : addHours(start, 1);
 
       // Ensure valid dates
       if (isNaN(start.getTime())) {
-        console.warn('Invalid start date for task:', task)
-        start = startOfDay(new Date())
+        console.warn('Invalid start date for task:', task);
+        start = startOfDay(new Date());
       }
       if (isNaN(end.getTime())) {
-        end = addHours(start, 1)
+        end = addHours(start, 1);
       }
-
-      // Ensure end is after start
       if (end <= start) {
-        end = addHours(start, 1)
+        end = addHours(start, 1);
       }
 
       return {
@@ -248,139 +382,54 @@ export function TaskCalendar({ tasks }: TaskCalendarProps) {
         end,
         allDay: false,
         priority: task.priority,
-      }
-    })
+      };
+    });
 
+    // Store initial positions in global state
+    newEvents.forEach(event => {
+      globalTaskPositions[event.id] = {
+        start: event.start.toISOString(),
+        end: event.end.toISOString()
+      };
+    });
+    
     // Sort events to ensure consistent rendering
-    newEvents.sort((a, b) => a.start.getTime() - b.start.getTime())
+    newEvents.sort((a, b) => a.start.getTime() - b.start.getTime());
     
-    setMyEvents(newEvents)
-  }, [tasks])
+    setMyEvents(newEvents);
+  }, [tasks]);
 
-  // Save event positions to localStorage whenever myEvents changes
+  // Update global positions whenever events change
   useEffect(() => {
-    if (!myEvents.length || typeof window === 'undefined') return
+    if (!myEvents.length) return;
     
+    // Update the ref for unmount handler
+    const newPositions: Record<string, { start: string, end: string }> = {};
+    myEvents.forEach(event => {
+      newPositions[event.id] = {
+        start: event.start.toISOString(),
+        end: event.end.toISOString()
+      };
+    });
+    
+    taskPositionsRef.current = newPositions;
+    
+    // Also update global variable
+    Object.assign(globalTaskPositions, newPositions);
+    
+    // Also update localStorage as backup
     try {
-      // Create a map of task IDs to their positions
-      const taskPositionMap: Record<string, { start: string, end: string }> = myEvents.reduce((acc, event) => {
-        acc[event.id] = {
-          start: event.start.toISOString(),
-          end: event.end.toISOString()
-        }
-        return acc
-      }, {} as Record<string, { start: string, end: string }>)
-      
-      // Save to localStorage
-      localStorage.setItem('calendar_task_positions', JSON.stringify(taskPositionMap))
-      localStorage.setItem('calendar_task_positions_timestamp', new Date().toISOString())
+      localStorage.setItem('calendar_task_positions', JSON.stringify(newPositions));
+      localStorage.setItem('calendar_task_positions_timestamp', new Date().toISOString());
     } catch (error) {
-      console.warn('Failed to save task positions to localStorage:', error)
+      console.warn('Failed to save positions to localStorage:', error);
     }
-  }, [myEvents])
-
-  // Save positions on component unmount to ensure no data is lost
-  useEffect(() => {
-    return () => {
-      if (!myEvents.length || typeof window === 'undefined') return;
-      
-      try {
-        // Create a map of task IDs to their positions
-        const taskPositionMap: Record<string, { start: string, end: string }> = myEvents.reduce((acc, event) => {
-          acc[event.id] = {
-            start: event.start.toISOString(),
-            end: event.end.toISOString()
-          }
-          return acc
-        }, {} as Record<string, { start: string, end: string }>)
-        
-        // Save to localStorage before unmount
-        localStorage.setItem('calendar_task_positions', JSON.stringify(taskPositionMap))
-        localStorage.setItem('calendar_task_positions_timestamp', new Date().toISOString())
-        console.log('Saved calendar positions before unmount')
-      } catch (error) {
-        console.warn('Failed to save task positions on unmount:', error)
-      }
-    };
   }, [myEvents]);
-
-  // Force database update when moving out of calendar tab
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'hidden' && myEvents.length > 0) {
-        // Page is being hidden, save state to localStorage
-        try {
-          // Create a map of task IDs to their positions
-          const taskPositionMap: Record<string, { start: string, end: string }> = myEvents.reduce((acc, event) => {
-            acc[event.id] = {
-              start: event.start.toISOString(),
-              end: event.end.toISOString()
-            }
-            return acc
-          }, {} as Record<string, { start: string, end: string }>)
-          
-          // Save to localStorage
-          localStorage.setItem('calendar_task_positions', JSON.stringify(taskPositionMap))
-          localStorage.setItem('calendar_task_positions_timestamp', new Date().toISOString())
-        } catch (error) {
-          console.warn('Failed to save positions on visibility change:', error)
-        }
-      }
-    };
-    
-    // Listen for tab/window visibility changes
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    
-    return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-    };
-  }, [myEvents]);
-
-  // Function to update task in the database
-  const updateTaskInDatabase = useCallback(async (
-    taskId: string, 
-    startDate: Date, 
-    endDate: Date, 
-    isAllDay: boolean
-  ) => {
-    try {
-      const response = await fetch(`/api/tasks/${taskId}`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          startDate: startDate.toISOString(),
-          dueDate: endDate.toISOString(),
-          isAllDay,
-        }),
-      })
-
-      if (!response.ok) {
-        const errorData = await response.json()
-        throw new Error(errorData.message || 'Failed to update task')
-      }
-
-      // Dispatch refresh event with action type 'update'
-      window.dispatchEvent(new CustomEvent('refreshTasks', {
-        detail: { action: 'update', taskId }
-      }))
-
-      toast.success('Task updated successfully')
-      return true
-    } catch (error) {
-      console.error('Error updating task:', error)
-      toast.error(error instanceof Error ? error.message : 'Failed to update task')
-      return false
-    }
-  }, [])
 
   const moveEvent = useCallback(
     async ({ event, start, end, isAllDay: droppedOnAllDaySlot = false }: any) => {
-      const startDate = new Date(start)
-      const endDate = new Date(end)
+      const startDate = new Date(start);
+      const endDate = new Date(end);
       
       // Optimistically update UI
       const updatedEvent = { 
@@ -388,88 +437,59 @@ export function TaskCalendar({ tasks }: TaskCalendarProps) {
         start: startDate,
         end: endDate,
         allDay: droppedOnAllDaySlot
-      }
+      };
 
       // Update events in state immediately
       setMyEvents(prev => {
-        const filtered = prev.filter(ev => ev.id !== event.id)
-        const updatedEvents = [...filtered, updatedEvent]
-        
-        // Store task positions in localStorage (session independent)
-        if (typeof window !== 'undefined') {
-          try {
-            // Create a map of task IDs to their positions
-            const taskPositionMap: Record<string, { start: string, end: string }> = updatedEvents.reduce((acc, ev) => {
-              acc[ev.id] = {
-                start: ev.start.toISOString(),
-                end: ev.end.toISOString()
-              }
-              return acc
-            }, {} as Record<string, { start: string, end: string }>)
-            
-            localStorage.setItem('calendar_task_positions', JSON.stringify(taskPositionMap))
-            localStorage.setItem('calendar_task_positions_timestamp', new Date().toISOString())
-          } catch (err) {
-            console.warn('Failed to save task positions to localStorage:', err)
-          }
-        }
-        
-        return updatedEvents
-      })
-
-      // Try updating the database with retries
-      let retries = 0;
-      const maxRetries = 3;
-      let success = false;
+        const filtered = prev.filter(ev => ev.id !== event.id);
+        const updatedEvents = [...filtered, updatedEvent];
+        return updatedEvents;
+      });
       
-      while (retries < maxRetries && !success) {
-        try {
-          // Update database
-          const response = await fetch(`/api/tasks/${event.id}`, {
-            method: 'PATCH',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              startDate: startDate.toISOString(),
-              dueDate: endDate.toISOString(),
-              isAllDay: droppedOnAllDaySlot,
-            }),
-          })
+      // Mark that positions have changed and need database sync
+      setPositionsChanged(true);
 
-          if (response.ok) {
-            success = true;
-            // Don't dispatch refresh event to prevent reverting changes
-            if (retries === 0) { // Only show toast on first successful attempt
-              toast.success('Task updated successfully')
-            }
-          } else {
-            const errorData = await response.json()
-            throw new Error(errorData.message || 'Failed to update task')
-          }
-        } catch (error) {
-          console.error(`Error updating task (attempt ${retries + 1}):`, error)
-          retries++;
-          
-          if (retries >= maxRetries) {
-            toast.error('Failed to update task in database, but your changes are saved locally')
-          } else {
-            // Wait before retrying (exponential backoff)
-            await new Promise(resolve => setTimeout(resolve, 1000 * retries))
-          }
+      // Update global storage immediately
+      globalTaskPositions[event.id] = {
+        start: startDate.toISOString(),
+        end: endDate.toISOString()
+      };
+      
+      // Also try database update, but don't revert UI on failure
+      try {
+        const response = await fetch(`/api/tasks/${event.id}`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            startDate: startDate.toISOString(),
+            dueDate: endDate.toISOString(),
+            isAllDay: droppedOnAllDaySlot,
+          }),
+        });
+
+        if (response.ok) {
+          toast.success('Task updated successfully');
+          // If successful, we don't need to sync this task on unmount
+          setPositionsChanged(false);
+        } else {
+          const errorData = await response.json();
+          console.warn('Database update failed:', errorData);
+          // We'll rely on the component unmount sync
         }
+      } catch (error) {
+        console.error(`Error updating task:`, error);
+        toast.error('Changes saved locally. Will try to sync later.');
       }
-      
-      // Even if database update failed, we keep the UI updated and localStorage saved
-      // This ensures the user's changes persist locally
     },
     []
-  )
+  );
 
   const resizeEvent = useCallback(
     async ({ event, start, end }: any) => {
-      const startDate = new Date(start)
-      const endDate = new Date(end)
+      const startDate = new Date(start);
+      const endDate = new Date(end);
       
       // Optimistically update UI
       const updatedEvent = { 
@@ -477,34 +497,25 @@ export function TaskCalendar({ tasks }: TaskCalendarProps) {
         start: startDate,
         end: endDate,
         allDay: false
-      }
+      };
 
       // Update events in state
       setMyEvents(prev => {
-        const filtered = prev.filter(ev => ev.id !== event.id)
-        const updatedEvents = [...filtered, updatedEvent]
-        
-        // Store updated events in localStorage to persist between sessions
-        if (typeof window !== 'undefined') {
-          try {
-            const taskPositionMap: Record<string, { start: string, end: string }> = updatedEvents.reduce((acc, ev) => {
-              acc[ev.id] = {
-                start: ev.start.toISOString(),
-                end: ev.end.toISOString()
-              }
-              return acc
-            }, {} as Record<string, { start: string, end: string }>)
-            
-            localStorage.setItem('calendar_task_positions', JSON.stringify(taskPositionMap))
-            localStorage.setItem('calendar_task_positions_timestamp', new Date().toISOString())
-          } catch (err) {
-            console.warn('Failed to save task positions to localStorage:', err)
-          }
-        }
-        
-        return updatedEvents
-      })
+        const filtered = prev.filter(ev => ev.id !== event.id);
+        const updatedEvents = [...filtered, updatedEvent];
+        return updatedEvents;
+      });
 
+      // Mark that positions have changed and need database sync
+      setPositionsChanged(true);
+
+      // Update global storage immediately
+      globalTaskPositions[event.id] = {
+        start: startDate.toISOString(),
+        end: endDate.toISOString()
+      };
+      
+      // Also try database update, but don't revert UI on failure
       try {
         // Update directly to the database
         const response = await fetch(`/api/tasks/${event.id}`, {
@@ -517,44 +528,20 @@ export function TaskCalendar({ tasks }: TaskCalendarProps) {
             dueDate: endDate.toISOString(),
             isAllDay: false,
           }),
-        })
+        });
 
-        if (!response.ok) {
-          const errorData = await response.json()
-          throw new Error(errorData.message || 'Failed to update task')
+        if (response.ok) {
+          toast.success('Task updated successfully');
+          // If successful, we don't need to sync this task on unmount
+          setPositionsChanged(false);
+        } else {
+          const errorData = await response.json();
+          console.warn('Database update failed:', errorData);
+          // We'll rely on the component unmount sync
         }
-
-        // Don't dispatch refresh event to prevent reverting changes
-        toast.success('Task updated successfully')
       } catch (error) {
-        console.error('Error updating task:', error)
-        toast.error(error instanceof Error ? error.message : 'Failed to update task')
-        
-        // Revert if failed
-        setMyEvents(prev => {
-          const filtered = prev.filter(ev => ev.id !== event.id)
-          const updatedEvents = [...filtered, event]
-          
-          // Update localStorage with reverted state
-          if (typeof window !== 'undefined') {
-            try {
-              const taskPositionMap: Record<string, { start: string, end: string }> = updatedEvents.reduce((acc, ev) => {
-                acc[ev.id] = {
-                  start: ev.start.toISOString(),
-                  end: ev.end.toISOString()
-                }
-                return acc
-              }, {} as Record<string, { start: string, end: string }>)
-              
-              localStorage.setItem('calendar_task_positions', JSON.stringify(taskPositionMap))
-              localStorage.setItem('calendar_task_positions_timestamp', new Date().toISOString())
-            } catch (err) {
-              console.warn('Failed to save task positions to localStorage:', err)
-            }
-          }
-          
-          return updatedEvents
-        })
+        console.error('Error updating task:', error);
+        toast.error('Changes saved locally. Will try to sync later.');
       }
     },
     []

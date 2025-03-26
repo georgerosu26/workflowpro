@@ -160,8 +160,14 @@ export function AIScheduleAssistant({
         }),
       })
 
-      if (!response.ok || !response.body) {
-        throw new Error('Failed to get AI response')
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => 'Unknown error')
+        console.error('API error response:', errorText)
+        throw new Error(`Server error: ${response.status} - ${errorText || response.statusText}`)
+      }
+
+      if (!response.body) {
+        throw new Error('Response body is null')
       }
 
       const reader = response.body.getReader()
@@ -170,51 +176,78 @@ export function AIScheduleAssistant({
       let aiResponseData = null
 
       // Stream in the response
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
+      try {
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
 
-        const chunk = decoder.decode(value, { stream: true })
-        responseText += chunk
+          const chunk = decoder.decode(value, { stream: true })
+          responseText += chunk
 
-        // Look for task suggestions in JSON format
-        try {
-          if (chunk.includes('```json') && chunk.includes('```')) {
-            const jsonMatch = chunk.match(/```json\n([\s\S]*?)\n```/)
-            if (jsonMatch && jsonMatch[1]) {
-              const parsedData = JSON.parse(jsonMatch[1])
-              if (Array.isArray(parsedData)) {
-                aiResponseData = parsedData
+          // Look for task suggestions in JSON format
+          try {
+            if (chunk.includes('```json') && chunk.includes('```')) {
+              const jsonMatch = chunk.match(/```json\n([\s\S]*?)\n```/)
+              if (jsonMatch && jsonMatch[1]) {
+                const parsedData = JSON.parse(jsonMatch[1])
+                if (Array.isArray(parsedData)) {
+                  aiResponseData = parsedData
+                }
               }
             }
+          } catch (jsonError) {
+            console.warn('Error parsing JSON from chunk:', jsonError)
           }
-        } catch (error) {
-          console.warn('Error parsing JSON from chunk:', error)
-        }
 
-        setPartialResponse(responseText)
+          setPartialResponse(responseText)
+        }
+      } catch (streamError) {
+        console.error('Error reading stream:', streamError)
+        if (responseText) {
+          // We got some response before the error, so we can still use it
+          toast.warning('Response was interrupted, but partial content was received')
+        } else {
+          throw new Error('Failed to read response stream')
+        }
       }
 
       // Process any task suggestions from the response
       if (aiResponseData) {
-        processSuggestedTasks(aiResponseData, sessionId, newAiResponseId)
+        try {
+          processSuggestedTasks(aiResponseData, sessionId, newAiResponseId)
+        } catch (taskError) {
+          console.error('Error processing task suggestions:', taskError)
+          toast.error('Failed to process task suggestions')
+        }
       }
 
       // Add assistant's response to messages
       const assistantMessage: Message = { 
         role: 'assistant', 
-        content: responseText 
+        content: responseText || 'Sorry, I was unable to generate a complete response.'
       }
       
       setMessages(prev => [...prev, assistantMessage])
       setCurrentAiResponseId(newAiResponseId)
 
       // Save the chat session
-      await saveChatSession(sessionId, [...newMessages, assistantMessage])
+      try {
+        await saveChatSession(sessionId, [...newMessages, assistantMessage])
+      } catch (saveError) {
+        console.error('Error saving chat session:', saveError)
+        // Non-critical error, don't throw
+      }
 
     } catch (error) {
       console.error('Error getting AI response:', error)
-      toast.error('Failed to get AI response')
+      toast.error(`AI assistant error: ${error instanceof Error ? error.message : 'Unknown error'}`)
+      
+      // Add error message to chat
+      const errorMessage: Message = {
+        role: 'assistant',
+        content: 'Sorry, I encountered an error while processing your request. Please try again later.'
+      }
+      setMessages(prev => [...prev, errorMessage])
     } finally {
       setIsLoading(false)
       setIsTyping(false)

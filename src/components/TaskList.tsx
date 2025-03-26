@@ -285,27 +285,65 @@ export function TaskList() {
 
   // Transform tasks to calendar events for AI assistant
   const getCalendarEvents = () => {
-    return tasks
-      .filter(task => task.startDate && task.dueDate)
-      .map(task => {
-        // Safely convert dates
-        const startDate = task.startDate instanceof Date 
-          ? task.startDate 
-          : new Date(String(task.startDate));
-        
-        const endDate = task.dueDate instanceof Date 
-          ? task.dueDate 
-          : new Date(String(task.dueDate));
+    try {
+      return tasks
+        .filter(task => {
+          try {
+            // Only include tasks with valid dates
+            if (!task.startDate || !task.dueDate) return false;
+            
+            // Attempt to parse dates to verify they're valid
+            const startDate = new Date(String(task.startDate));
+            const endDate = new Date(String(task.dueDate));
+            
+            return !isNaN(startDate.getTime()) && !isNaN(endDate.getTime());
+          } catch (err) {
+            console.warn(`Invalid date format for task ${task.id}:`, err);
+            return false;
+          }
+        })
+        .map(task => {
+          try {
+            // Safely convert dates
+            const startDate = task.startDate instanceof Date 
+              ? task.startDate 
+              : new Date(String(task.startDate));
+            
+            const endDate = task.dueDate instanceof Date 
+              ? task.dueDate 
+              : new Date(String(task.dueDate));
 
-        return {
-          id: task.id,
-          title: task.title,
-          start: startDate,
-          end: endDate,
-          allDay: false, // Default to false since isAllDay may not exist
-          priority: task.priority
-        };
-      });
+            // Ensure valid dates
+            if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
+              throw new Error(`Invalid date for task ${task.id}`);
+            }
+
+            return {
+              id: task.id,
+              title: task.title,
+              start: startDate,
+              end: endDate,
+              allDay: Boolean(task.isAllDay),
+              priority: task.priority
+            };
+          } catch (err) {
+            console.warn(`Error converting task to calendar event:`, err);
+            return null;
+          }
+        })
+        .filter(event => event !== null) as {
+          id: string;
+          title: string;
+          start: Date;
+          end: Date;
+          allDay: boolean;
+          priority: 'low' | 'medium' | 'high';
+        }[];
+    } catch (error) {
+      console.error('Error generating calendar events:', error);
+      // Return empty array in case of error
+      return [];
+    }
   };
 
   if (loading) {

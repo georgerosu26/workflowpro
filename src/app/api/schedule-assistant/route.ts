@@ -100,25 +100,38 @@ Using this context, suggest an optimal schedule for any new tasks. Be specific w
     const stream = new ReadableStream({
       async start(controller) {
         try {
+          let hasContent = false
           for await (const chunk of response) {
             const content = chunk.choices[0]?.delta?.content || ''
             if (content) {
+              hasContent = true
               controller.enqueue(encoder.encode(content))
             }
           }
+          
+          // If we didn't get any content, send an error message
+          if (!hasContent) {
+            controller.enqueue(encoder.encode('I apologize, but I was unable to generate a response. Please try again.'))
+          }
+          
           controller.close()
         } catch (error) {
           console.error('Error streaming response:', error)
-          controller.error(error)
+          
+          // Send error details to the client
+          const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred'
+          controller.enqueue(encoder.encode(`Error: ${errorMessage}`))
+          
+          // Close the stream instead of using controller.error which can cause issues in some browsers
+          controller.close()
         }
       }
     })
 
-    // Return the streaming response
+    // Return the streaming response with appropriate headers
     return new Response(stream, {
       headers: {
         'Content-Type': 'text/plain; charset=utf-8',
-        'Transfer-Encoding': 'chunked'
       }
     })
   } catch (error) {

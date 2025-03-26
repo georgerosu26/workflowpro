@@ -278,14 +278,25 @@ export function TaskList() {
   const getCalendarEvents = () => {
     return tasks
       .filter(task => task.startDate && task.dueDate)
-      .map(task => ({
-        id: task.id,
-        title: task.title,
-        start: new Date(task.startDate as string),
-        end: new Date(task.dueDate as string),
-        allDay: task.isAllDay || false,
-        priority: task.priority
-      }));
+      .map(task => {
+        // Safely convert dates
+        const startDate = task.startDate instanceof Date 
+          ? task.startDate 
+          : new Date(String(task.startDate));
+        
+        const endDate = task.dueDate instanceof Date 
+          ? task.dueDate 
+          : new Date(String(task.dueDate));
+
+        return {
+          id: task.id,
+          title: task.title,
+          start: startDate,
+          end: endDate,
+          allDay: false, // Default to false since isAllDay may not exist
+          priority: task.priority
+        };
+      });
   };
 
   if (loading) {

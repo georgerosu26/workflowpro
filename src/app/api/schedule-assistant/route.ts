@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { OpenAI } from 'openai'
 import { currentUser } from '@clerk/nextjs/server'
-import { StreamingTextResponse } from 'ai'
 import { connectToDatabase } from '@/lib/mongoose'
 import Task from '@/models/Task'
 
@@ -96,8 +95,27 @@ Using this context, suggest an optimal schedule for any new tasks. Be specific w
       stream: true,
     })
 
-    // Create a streaming text response
-    return new StreamingTextResponse(response.toReadableStream())
+    // Create a streaming response using the Web Streams API
+    const encoder = new TextEncoder()
+    const stream = new ReadableStream({
+      async start(controller) {
+        for await (const chunk of response) {
+          const content = chunk.choices[0]?.delta?.content || ''
+          if (content) {
+            controller.enqueue(encoder.encode(content))
+          }
+        }
+        controller.close()
+      }
+    })
+
+    // Return the streaming response
+    return new Response(stream, {
+      headers: {
+        'Content-Type': 'text/plain; charset=utf-8',
+        'Transfer-Encoding': 'chunked'
+      }
+    })
   } catch (error) {
     console.error('Error in schedule-assistant API route:', error)
     return NextResponse.json(

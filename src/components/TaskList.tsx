@@ -10,6 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { AIAssistantTab } from './AIAssistantTab';
 import { useParams } from 'next/navigation';
 import { KanbanBoard } from './KanbanBoard';
+import { AIScheduleAssistant } from './AIScheduleAssistant';
 
 interface Task {
   id: string;
@@ -217,6 +218,76 @@ export function TaskList() {
     }
   };
 
+  // New function to handle creating a task from AI suggestions
+  const handleCreateTask = async (task: Omit<Task, 'id'>) => {
+    try {
+      const response = await fetch('/api/tasks', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          tasks: [task]
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to create task');
+      }
+
+      const data = await response.json();
+      const createdTasks = data.tasks || [];
+      
+      if (createdTasks.length > 0) {
+        toast.success('Task created successfully');
+        return createdTasks[0].id;
+      } else {
+        throw new Error('No task returned from API');
+      }
+    } catch (error) {
+      console.error('Error creating task:', error);
+      toast.error('Failed to create task');
+      throw error;
+    }
+  };
+
+  // New function to handle updating a task from AI suggestions
+  const handleUpdateTask = async (taskId: string, updates: Partial<Task>) => {
+    try {
+      const response = await fetch(`/api/tasks/${taskId}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(updates),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to update task');
+      }
+
+      toast.success('Task updated successfully');
+    } catch (error) {
+      console.error('Error updating task:', error);
+      toast.error('Failed to update task');
+      throw error;
+    }
+  };
+
+  // Transform tasks to calendar events for AI assistant
+  const getCalendarEvents = () => {
+    return tasks
+      .filter(task => task.startDate && task.dueDate)
+      .map(task => ({
+        id: task.id,
+        title: task.title,
+        start: new Date(task.startDate as string),
+        end: new Date(task.dueDate as string),
+        allDay: task.isAllDay || false,
+        priority: task.priority
+      }));
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -246,10 +317,11 @@ export function TaskList() {
       onValueChange={handleTabChange} 
       className="h-full flex flex-col"
     >
-      <TabsList className="grid w-full grid-cols-3 mb-2">
+      <TabsList className="grid w-full grid-cols-4 mb-2">
         <TabsTrigger value="ai-assistant">AI Assistant</TabsTrigger>
         <TabsTrigger value="kanban">Kanban Board</TabsTrigger>
         <TabsTrigger value="calendar">Calendar</TabsTrigger>
+        <TabsTrigger value="schedule-assistant">Schedule Assistant</TabsTrigger>
       </TabsList>
 
       <div className="flex-1 overflow-hidden">
@@ -263,6 +335,16 @@ export function TaskList() {
 
         <TabsContent value="calendar" className="h-full m-0 overflow-hidden">
           <TaskCalendar tasks={tasks} />
+        </TabsContent>
+
+        <TabsContent value="schedule-assistant" className="h-full m-0 overflow-auto">
+          <AIScheduleAssistant 
+            existingTasks={tasks} 
+            calendarEvents={getCalendarEvents()}
+            onCreateTask={handleCreateTask}
+            onUpdateTask={handleUpdateTask}
+            onScheduleRefresh={fetchTasks}
+          />
         </TabsContent>
       </div>
     </Tabs>

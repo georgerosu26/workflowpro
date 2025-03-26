@@ -31,7 +31,7 @@ export function TaskList() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const sessionId = searchParams.get('session');
-  const activeTab = searchParams.get('tab') || 'kanban';
+  const activeTab = searchParams.get('tab') || 'ai-assistant';
   
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
@@ -187,22 +187,22 @@ export function TaskList() {
       className="h-full flex flex-col"
     >
       <TabsList className="grid w-full grid-cols-3 mb-2">
+        <TabsTrigger value="ai-assistant">AI Assistant</TabsTrigger>
         <TabsTrigger value="kanban">Kanban Board</TabsTrigger>
         <TabsTrigger value="calendar">Calendar</TabsTrigger>
-        <TabsTrigger value="ai-assistant">AI Assistant</TabsTrigger>
       </TabsList>
 
       <div className="flex-1 overflow-hidden">
+        <TabsContent value="ai-assistant" className="h-full m-0 overflow-auto">
+          <AIAssistantTab />
+        </TabsContent>
+
         <TabsContent value="kanban" className="h-full m-0">
           <KanbanBoard tasks={tasks} onUpdate={fetchTasks} />
         </TabsContent>
 
         <TabsContent value="calendar" className="h-full m-0 overflow-hidden">
           <TaskCalendar tasks={tasks} />
-        </TabsContent>
-
-        <TabsContent value="ai-assistant" className="h-full m-0 overflow-auto">
-          <AIAssistantTab />
         </TabsContent>
       </div>
     </Tabs>

@@ -25,6 +25,8 @@ interface Task {
   sessionId?: string
   aiResponseId?: string
   userId?: string
+  createdAt: Date // Change to required
+  updatedAt: Date // Change to required
 }
 
 interface Message {
@@ -239,6 +241,8 @@ export function AIScheduleAssistant({
       startDate: task.startDate || undefined,
       dueDate: task.dueDate || undefined,
       duration: task.duration || 60, // default 1 hour if not specified
+      createdAt: new Date(), // Add current date for createdAt
+      updatedAt: new Date()  // Add current date for updatedAt
     }))
 
     setTaskSuggestions(validTasks)
@@ -267,8 +271,19 @@ export function AIScheduleAssistant({
   // Add a suggested task to the calendar
   const addToSchedule = async (task: Omit<Task, 'id'>) => {
     try {
+      // Make sure we have all required fields
+      const fullTask = {
+        ...task,
+        // Ensure required fields exist even if they weren't in the original task suggestion
+        createdAt: task.createdAt || new Date(),
+        updatedAt: task.updatedAt || new Date(),
+        sessionId: task.sessionId || getOrCreateSessionId(),
+        aiResponseId: task.aiResponseId || currentAiResponseId || crypto.randomUUID(),
+        userId: task.userId || user?.id
+      };
+
       // Create the task first
-      const taskId = await onCreateTask(task)
+      const taskId = await onCreateTask(fullTask)
       
       // If we have scheduling info, update with it
       if (task.startDate && task.dueDate) {

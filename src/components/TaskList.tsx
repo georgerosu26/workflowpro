@@ -9,7 +9,7 @@ import { TaskCalendar } from './TaskCalendar';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { AIAssistantTab } from './AIAssistantTab';
 import { useParams } from 'next/navigation';
-import { KanbanBoard } from './KanbanBoard';
+import { KanbanBoard } from '@/components/KanbanBoard';
 import { AIScheduleAssistant } from './AIScheduleAssistant';
 
 interface Task {
@@ -19,13 +19,15 @@ interface Task {
   priority: 'low' | 'medium' | 'high';
   category: string;
   status: 'todo' | 'in-progress' | 'done';
-  sessionId: string;
-  aiResponseId: string;
-  userId: string;
-  startDate?: Date;
-  dueDate?: Date;
+  sessionId?: string;
+  aiResponseId?: string;
+  userId?: string;
+  startDate?: string | Date;
+  dueDate?: string | Date;
   createdAt: Date;
   updatedAt: Date;
+  isAllDay?: boolean;
+  duration?: number;
 }
 
 export function TaskList() {
@@ -219,15 +221,22 @@ export function TaskList() {
   };
 
   // New function to handle creating a task from AI suggestions
-  const handleCreateTask = async (task: Omit<Task, 'id'>) => {
+  const handleCreateTask = async (task: Omit<Task, 'id'>): Promise<string> => {
     try {
+      // Add default values for required fields that might be missing
+      const taskWithDefaults = {
+        ...task,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      };
+
       const response = await fetch('/api/tasks', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          tasks: [task]
+          tasks: [taskWithDefaults]
         }),
       });
 

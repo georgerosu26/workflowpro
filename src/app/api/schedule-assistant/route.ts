@@ -99,13 +99,18 @@ Using this context, suggest an optimal schedule for any new tasks. Be specific w
     const encoder = new TextEncoder()
     const stream = new ReadableStream({
       async start(controller) {
-        for await (const chunk of response) {
-          const content = chunk.choices[0]?.delta?.content || ''
-          if (content) {
-            controller.enqueue(encoder.encode(content))
+        try {
+          for await (const chunk of response) {
+            const content = chunk.choices[0]?.delta?.content || ''
+            if (content) {
+              controller.enqueue(encoder.encode(content))
+            }
           }
+          controller.close()
+        } catch (error) {
+          console.error('Error streaming response:', error)
+          controller.error(error)
         }
-        controller.close()
       }
     })
 

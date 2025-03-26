@@ -173,7 +173,7 @@ export default function TasksPage() {
   }
 
   return (
-    <div className="container mx-auto p-4 h-screen flex flex-col">
+    <div className="w-full p-4 h-screen flex flex-col">
       <h1 className="text-2xl font-bold mb-4">Tasks</h1>
       <div className="flex gap-4 flex-1 h-[calc(100vh-6rem)] overflow-hidden">
         {/* Main content - takes more space when sidebar is collapsed */}

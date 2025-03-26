@@ -27,7 +27,7 @@ export default function RootLayout({
                 <MainNav />
               </div>
             </header>
-            <main className="container py-6">
+            <main className="w-full py-6">
               {children}
             </main>
           </div>

@@ -42,6 +42,7 @@ export default function TasksPage() {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [updatingTaskId, setUpdatingTaskId] = useState<string | null>(null)
+  const [sidebarExpanded, setSidebarExpanded] = useState(false)
 
   useEffect(() => {
     if (session?.id && userId) {
@@ -138,6 +139,10 @@ export default function TasksPage() {
     }
   }
 
+  const toggleSidebar = () => {
+    setSidebarExpanded(prev => !prev)
+  }
+
   if (loading) {
     return (
       <div className="flex justify-center items-center h-screen">
@@ -171,15 +176,39 @@ export default function TasksPage() {
     <div className="container mx-auto p-4 h-screen flex flex-col">
       <h1 className="text-2xl font-bold mb-4">Tasks</h1>
       <div className="flex gap-4 flex-1 h-[calc(100vh-6rem)] overflow-hidden">
-        {/* Main content - takes 80% of the space */}
-        <div className="flex-[4] overflow-auto">
+        {/* Main content - takes more space when sidebar is collapsed */}
+        <div className={`${sidebarExpanded ? 'flex-[4]' : 'flex-[6]'} overflow-auto transition-all duration-300`}>
           <Suspense fallback={<div>Loading tasks...</div>}>
             <TaskList />
           </Suspense>
         </div>
         
-        {/* Chat sessions sidebar - takes 20% of the space */}
-        <div className="flex-1 border-l pl-4 h-full flex flex-col min-w-[250px] max-w-[300px]">
+        {/* Sidebar toggle button */}
+        <button 
+          onClick={toggleSidebar}
+          className="self-start mt-2 p-2 bg-gray-100 hover:bg-gray-200 rounded-md shadow-sm"
+          aria-label={sidebarExpanded ? "Collapse sidebar" : "Expand sidebar"}
+        >
+          {sidebarExpanded ? (
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M15 18l-6-6 6-6" />
+            </svg>
+          ) : (
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M9 18l6-6-6-6" />
+            </svg>
+          )}
+        </button>
+        
+        {/* Chat sessions sidebar - collapsed by default */}
+        <div className={`
+          border-l pl-4 h-full flex flex-col 
+          transition-all duration-300 ease-in-out 
+          ${sidebarExpanded 
+            ? 'flex-1 min-w-[250px] max-w-[300px] opacity-100' 
+            : 'w-0 overflow-hidden opacity-0'
+          }
+        `}>
           <div className="sticky top-0 bg-white pb-2 z-10">
             <h2 className="text-lg font-semibold mb-2">Chat History</h2>
           </div>
